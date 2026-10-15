@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 
 const app = express();
 
@@ -17,5 +18,8 @@ app.get("/api/health", (req, res) => {
     service: "flowforge-api",
   });
 });
+
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 export default app;
