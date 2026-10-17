@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
+import pool from "./db.js";
 
 const app = express();
 
@@ -17,6 +18,22 @@ app.get("/api/health", (req, res) => {
     status: "ok",
     service: "flowforge-api",
   });
+});
+
+app.get("/api/workflows", async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, description, is_active, created_at
+       FROM workflows
+       ORDER BY created_at DESC`
+    );
+
+    res.status(200).json({
+      workflows: result.rows,
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.use(notFoundHandler);
