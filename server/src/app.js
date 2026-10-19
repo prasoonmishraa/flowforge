@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 import pool from "./db.js";
+import { createWorkflowSchema } from "./validators/workflowValidator.js";
 
 const app = express();
 
@@ -25,7 +26,7 @@ app.get("/api/workflows", async (req, res, next) => {
     const result = await pool.query(
       `SELECT id, name, description, is_active, created_at
        FROM workflows
-       ORDER BY created_at DESC`
+       ORDER BY created_at DESC`,
     );
 
     res.status(200).json({
@@ -33,6 +34,40 @@ app.get("/api/workflows", async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+});
+
+app.post("/api/workflows", async (req, res, next) => {
+  const validation = createWorkflowSchema.safeParse(req.body);
+
+  if (!validation.success) {
+    return res.status(400).json({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Invalid workflow data",
+        details: validation.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
+        })),
+      },
+    });
+  }
+
+  const { name, description } = validation.data;
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO workflows (name, description)
+       VALUES ($1, $2)
+       RETURNING id, name, description, is_active, created_at`,
+      [name, description ?? null],
+    );
+
+    return res.status(201).json({
+      workflow: result.rows[0],
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 
