@@ -154,3 +154,31 @@ describe("GET /api/workflows/:id", () => {
     expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
   });
 });
+
+describe("Workflow ID validation", () => {
+  it("rejects a non-numeric ID without querying the database", async () => {
+    const response = await request(app).get("/api/workflows/abc");
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_WORKFLOW_ID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects zero as a workflow ID", async () => {
+    const response = await request(app).get("/api/workflows/0");
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_WORKFLOW_ID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid ID in a PATCH request", async () => {
+    const response = await request(app)
+      .patch("/api/workflows/abc")
+      .send({ name: "Updated Workflow" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_WORKFLOW_ID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+});

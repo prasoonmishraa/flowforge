@@ -4,6 +4,7 @@ import helmet from "helmet";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 import pool from "./db.js";
 import { createWorkflowSchema,updateWorkflowSchema } from "./validators/workflowValidator.js";
+import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
 
 const app = express();
 
@@ -38,6 +39,14 @@ app.get("/api/workflows", async (req, res, next) => {
 });
 
 app.get("/api/workflows/:id", async (req, res, next) => {
+  if (!isValidWorkflowId(req.params.id)) {
+  return res.status(400).json({
+    error: {
+      code: "INVALID_WORKFLOW_ID",
+      message: "Workflow ID must be a positive integer",
+    },
+  });
+}
   try {
     const result = await pool.query(
       `SELECT id, name, description, is_active, created_at
@@ -99,6 +108,14 @@ app.post("/api/workflows", async (req, res, next) => {
 
 app.patch("/api/workflows/:id", async (req, res, next) => {
   const validation = updateWorkflowSchema.safeParse(req.body);
+  if (!isValidWorkflowId(req.params.id)) {
+  return res.status(400).json({
+    error: {
+      code: "INVALID_WORKFLOW_ID",
+      message: "Workflow ID must be a positive integer",
+    },
+  });
+}
 
   if (!validation.success) {
     return res.status(400).json({
