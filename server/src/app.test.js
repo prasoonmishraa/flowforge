@@ -78,3 +78,79 @@ describe("POST /api/workflows", () => {
     expect(pool.query).not.toHaveBeenCalled();
   });
 });
+
+describe("PATCH /api/workflows/:id", () => {
+  it("updates a workflow when the input is valid", async () => {
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        {
+          id: "1",
+          name: "Video Processing v2",
+          description: "Processes uploaded videos and generates captions.",
+          is_active: true,
+          created_at: "2026-10-16T13:21:04.490Z",
+        },
+      ],
+    });
+
+    const response = await request(app)
+      .patch("/api/workflows/1")
+      .send({ name: "Video Processing v2" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.workflow.name).toBe("Video Processing v2");
+    expect(pool.query).toHaveBeenCalledOnce();
+  });
+
+  it("returns 404 when the workflow does not exist", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app)
+      .patch("/api/workflows/999")
+      .send({ name: "Updated Workflow" });
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+  });
+
+  it("rejects an empty update", async () => {
+    const response = await request(app)
+      .patch("/api/workflows/1")
+      .send({});
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+});
+describe("GET /api/workflows/:id", () => {
+  it("returns a workflow when it exists", async () => {
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        {
+          id: "1",
+          name: "Video Processing",
+          description: "Processes uploaded videos and generates captions.",
+          is_active: true,
+          created_at: "2026-10-16T13:21:04.490Z",
+        },
+      ],
+    });
+
+    const response = await request(app).get("/api/workflows/1");
+
+    expect(response.status).toBe(200);
+    expect(response.body.workflow.id).toBe("1");
+    expect(response.body.workflow.name).toBe("Video Processing");
+    expect(pool.query).toHaveBeenCalledOnce();
+  });
+
+  it("returns 404 when the workflow does not exist", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app).get("/api/workflows/999");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+  });
+});
