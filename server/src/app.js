@@ -3,7 +3,10 @@ import cors from "cors";
 import helmet from "helmet";
 import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 import pool from "./db.js";
-import { createWorkflowSchema,updateWorkflowSchema } from "./validators/workflowValidator.js";
+import {
+  createWorkflowSchema,
+  updateWorkflowSchema,
+} from "./validators/workflowValidator.js";
 import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
 
 const app = express();
@@ -40,19 +43,19 @@ app.get("/api/workflows", async (req, res, next) => {
 
 app.get("/api/workflows/:id", async (req, res, next) => {
   if (!isValidWorkflowId(req.params.id)) {
-  return res.status(400).json({
-    error: {
-      code: "INVALID_WORKFLOW_ID",
-      message: "Workflow ID must be a positive integer",
-    },
-  });
-}
+    return res.status(400).json({
+      error: {
+        code: "INVALID_WORKFLOW_ID",
+        message: "Workflow ID must be a positive integer",
+      },
+    });
+  }
   try {
     const result = await pool.query(
       `SELECT id, name, description, is_active, created_at
        FROM workflows
        WHERE id = $1`,
-      [req.params.id]
+      [req.params.id],
     );
 
     if (result.rows.length === 0) {
@@ -109,13 +112,13 @@ app.post("/api/workflows", async (req, res, next) => {
 app.patch("/api/workflows/:id", async (req, res, next) => {
   const validation = updateWorkflowSchema.safeParse(req.body);
   if (!isValidWorkflowId(req.params.id)) {
-  return res.status(400).json({
-    error: {
-      code: "INVALID_WORKFLOW_ID",
-      message: "Workflow ID must be a positive integer",
-    },
-  });
-}
+    return res.status(400).json({
+      error: {
+        code: "INVALID_WORKFLOW_ID",
+        message: "Workflow ID must be a positive integer",
+      },
+    });
+  }
 
   if (!validation.success) {
     return res.status(400).json({
@@ -147,7 +150,7 @@ app.patch("/api/workflows/:id", async (req, res, next) => {
        SET ${updates.join(", ")}
        WHERE id = $${values.length}
        RETURNING id, name, description, is_active, created_at`,
-      values
+      values,
     );
 
     if (result.rows.length === 0) {
@@ -164,6 +167,76 @@ app.patch("/api/workflows/:id", async (req, res, next) => {
     });
   } catch (error) {
     return next(error);
+  }
+});
+
+app.post("/api/workflows/:id/executions", async (req, res, next) => {
+  if (!isValidWorkflowId(req.params.id)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_WORKFLOW_ID",
+        message: "Workflow ID must be a positive integer",
+      },
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const workflowResult = await client.query(
+      `SELECT id, is_active
+       FROM workflows
+       WHERE id = $1
+       FOR UPDATE`,
+      [req.params.id],
+    );
+
+    if (workflowResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_NOT_FOUND",
+          message: "Workflow not found",
+        },
+      });
+    }
+
+    if (!workflowResult.rows[0].is_active) {
+      await client.query("ROLLBACK");
+
+      return res.status(409).json({
+        error: {
+          code: "WORKFLOW_INACTIVE",
+          message: "Cannot execute an inactive workflow",
+        },
+      });
+    }
+
+    const executionResult = await client.query(
+      `INSERT INTO executions (workflow_id, status)
+       VALUES ($1, $2)
+       RETURNING id, workflow_id, status, started_at, finished_at, created_at`,
+      [req.params.id, "pending"],
+    );
+
+    await client.query("COMMIT");
+
+    return res.status(201).json({
+      execution: executionResult.rows[0],
+    });
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      error.rollbackError = rollbackError;
+    }
+
+    return next(error);
+  } finally {
+    client.release();
   }
 });
 

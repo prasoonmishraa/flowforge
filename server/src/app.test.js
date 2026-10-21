@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
 
+const mockClient = {
+  query: vi.fn(),
+  release: vi.fn(),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  pool.connect = vi.fn().mockResolvedValue(mockClient);
+});
+
 vi.mock("./db.js", () => ({
   default: {
     query: vi.fn(),
@@ -9,10 +19,6 @@ vi.mock("./db.js", () => ({
 
 import pool from "./db.js";
 import app from "./app.js";
-
-beforeEach(() => {
-  vi.clearAllMocks();
-});
 
 describe("GET /api/health", () => {
   it("returns the API health status", async () => {
@@ -39,12 +45,10 @@ describe("POST /api/workflows", () => {
       ],
     });
 
-    const response = await request(app)
-      .post("/api/workflows")
-      .send({
-        name: "Test Workflow",
-        description: "A workflow created during testing.",
-      });
+    const response = await request(app).post("/api/workflows").send({
+      name: "Test Workflow",
+      description: "A workflow created during testing.",
+    });
 
     expect(response.status).toBe(201);
     expect(response.body.workflow).toMatchObject({
@@ -56,7 +60,7 @@ describe("POST /api/workflows", () => {
 
     expect(pool.query).toHaveBeenCalledOnce();
   });
-    it("rejects an empty workflow name", async () => {
+  it("rejects an empty workflow name", async () => {
     const response = await request(app)
       .post("/api/workflows")
       .send({ name: "" });
@@ -67,11 +71,9 @@ describe("POST /api/workflows", () => {
   });
 
   it("rejects a request with no workflow name", async () => {
-    const response = await request(app)
-      .post("/api/workflows")
-      .send({
-        description: "A workflow without a name.",
-      });
+    const response = await request(app).post("/api/workflows").send({
+      description: "A workflow without a name.",
+    });
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
@@ -114,9 +116,7 @@ describe("PATCH /api/workflows/:id", () => {
   });
 
   it("rejects an empty update", async () => {
-    const response = await request(app)
-      .patch("/api/workflows/1")
-      .send({});
+    const response = await request(app).patch("/api/workflows/1").send({});
 
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("VALIDATION_ERROR");
@@ -180,5 +180,111 @@ describe("Workflow ID validation", () => {
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("INVALID_WORKFLOW_ID");
     expect(pool.query).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/workflows/:id/executions", () => {
+  it("creates a pending execution for an active workflow", async () => {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [{ id: "1", is_active: true }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "10",
+            workflow_id: "1",
+            status: "pending",
+            started_at: null,
+            finished_at: null,
+            created_at: "2026-10-21T13:00:00.000Z",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] }); // COMMIT
+
+    const response = await request(app).post("/api/workflows/1/executions");
+
+    expect(response.status).toBe(201);
+    expect(response.body.execution.status).toBe("pending");
+    expect(response.body.execution.workflow_id).toBe("1");
+    expect(mockClient.query).toHaveBeenCalledWith("BEGIN");
+    expect(mockClient.query).toHaveBeenCalledWith("COMMIT");
+    expect(mockClient.release).toHaveBeenCalledOnce();
+  });
+
+  it("returns 404 when the workflow does not exist", async () => {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rows: [] }) // SELECT
+      .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
+
+    const response = await request(app).post("/api/workflows/999/executions");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+    expect(mockClient.query).toHaveBeenCalledWith("ROLLBACK");
+    expect(mockClient.release).toHaveBeenCalledOnce();
+  });
+
+  it("returns 409 when the workflow is inactive", async () => {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [{ id: "1", is_active: false }],
+      })
+      .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
+
+    const response = await request(app).post("/api/workflows/1/executions");
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe("WORKFLOW_INACTIVE");
+    expect(mockClient.query).toHaveBeenCalledWith("ROLLBACK");
+    expect(mockClient.release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an invalid workflow ID without connecting to the database", async () => {
+    const response = await request(app).post("/api/workflows/abc/executions");
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_WORKFLOW_ID");
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it("rolls back and releases the connection when insertion fails", async () => {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [{ id: "1", is_active: true }],
+      })
+      .mockRejectedValueOnce(new Error("Database insertion failed"))
+      .mockResolvedValueOnce({ rows: [] }); // ROLLBACK
+
+    const response = await request(app).post("/api/workflows/1/executions");
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(mockClient.query).toHaveBeenCalledWith("ROLLBACK");
+    expect(mockClient.release).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the original error when rollback also fails", async () => {
+    const insertionError = new Error("Database insertion failed");
+
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [{ id: "1", is_active: true }],
+      })
+      .mockRejectedValueOnce(insertionError) // INSERT
+      .mockRejectedValueOnce(new Error("Rollback failed"));
+
+    const response = await request(app).post("/api/workflows/1/executions");
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(insertionError.rollbackError.message).toBe("Rollback failed");
+    expect(mockClient.release).toHaveBeenCalledOnce();
   });
 });
