@@ -287,4 +287,110 @@ describe("POST /api/workflows/:id/executions", () => {
     expect(insertionError.rollbackError.message).toBe("Rollback failed");
     expect(mockClient.release).toHaveBeenCalledOnce();
   });
+
+it("handles a connection acquisition failure", async () => {
+  pool.connect.mockRejectedValueOnce(
+    new Error("Database connection failed"),
+  );
+
+  const response = await request(app)
+    .post("/api/workflows/1/executions");
+
+  expect(response.status).toBe(500);
+  expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
+  expect(mockClient.query).not.toHaveBeenCalled();
+  expect(mockClient.release).not.toHaveBeenCalled();
+});
+
+
+describe("GET /api/workflows/:id/executions", () => {
+  it("returns execution history for an existing workflow", async () => {
+    mockClient.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "1" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "12",
+            workflow_id: "1",
+            status: "pending",
+            started_at: null,
+            finished_at: null,
+            created_at: "2026-10-22T10:00:00.000Z",
+          },
+          {
+            id: "11",
+            workflow_id: "1",
+            status: "completed",
+            started_at: "2026-10-22T09:00:00.000Z",
+            finished_at: "2026-10-22T09:05:00.000Z",
+            created_at: "2026-10-22T09:00:00.000Z",
+          },
+        ],
+      });
+
+    const response = await request(app)
+      .get("/api/workflows/1/executions");
+
+    expect(response.status).toBe(200);
+    expect(response.body.executions).toHaveLength(2);
+    expect(response.body.executions[0].id).toBe("12");
+    expect(mockClient.query).toHaveBeenCalledTimes(2);
+    expect(mockClient.release).toHaveBeenCalledOnce();
+  });
+
+  it("returns an empty array when a workflow has no executions", async () => {
+    mockClient.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "1" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [],
+      });
+
+    const response = await request(app)
+      .get("/api/workflows/1/executions");
+
+    expect(response.status).toBe(200);
+    expect(response.body.executions).toEqual([]);
+    expect(mockClient.release).toHaveBeenCalledOnce();
+  });
+
+  it("returns 404 when the workflow does not exist", async () => {
+    mockClient.query.mockResolvedValueOnce({
+      rows: [],
+    });
+
+    const response = await request(app)
+      .get("/api/workflows/999/executions");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+    expect(mockClient.release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an invalid workflow ID without connecting to the database", async () => {
+    const response = await request(app)
+      .get("/api/workflows/abc/executions");
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_WORKFLOW_ID");
+    expect(pool.connect).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 and releases the client when a query fails", async () => {
+    mockClient.query.mockRejectedValueOnce(
+      new Error("Database query failed"),
+    );
+
+    const response = await request(app)
+      .get("/api/workflows/1/executions");
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(mockClient.release).toHaveBeenCalledOnce();
+  });
+});
+
 });

@@ -180,9 +180,10 @@ app.post("/api/workflows/:id/executions", async (req, res, next) => {
     });
   }
 
-  const client = await pool.connect();
+  let client;
 
   try {
+    client = await pool.connect();
     await client.query("BEGIN");
 
     const workflowResult = await client.query(
@@ -228,15 +229,66 @@ app.post("/api/workflows/:id/executions", async (req, res, next) => {
       execution: executionResult.rows[0],
     });
   } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackError) {
-      error.rollbackError = rollbackError;
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        error.rollbackError = rollbackError;
+      }
     }
 
     return next(error);
   } finally {
-    client.release();
+    client?.release();
+  }
+});
+
+app.get("/api/workflows/:id/executions", async (req, res, next) => {
+  const { id } = req.params;
+
+  if (!isValidWorkflowId(id)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_WORKFLOW_ID",
+        message: "Workflow ID must be a positive integer",
+      },
+    });
+  }
+
+  let client;
+
+  try {
+    client = await pool.connect();
+
+    const workflowResult = await client.query(
+      "SELECT id FROM workflows WHERE id = $1",
+      [id],
+    );
+
+    if (workflowResult.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_NOT_FOUND",
+          message: "Workflow not found",
+        },
+      });
+    }
+
+    const executionsResult = await client.query(
+      `SELECT id, workflow_id, status, started_at, finished_at, created_at
+       FROM executions
+       WHERE workflow_id = $1
+       ORDER BY created_at DESC`,
+      [id],
+    );
+
+    return res.status(200).json({
+      executions: executionsResult.rows,
+    });
+  } catch (error) {
+    return next(error);
+  } finally {
+    client?.release();
   }
 });
 
