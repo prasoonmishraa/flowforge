@@ -8,6 +8,7 @@ import {
   updateWorkflowSchema,
 } from "./validators/workflowValidator.js";
 import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
+import { updateExecutionStatusSchema } from "./validators/executionValidator.js";
 
 const app = express();
 
@@ -289,6 +290,87 @@ app.get("/api/workflows/:id/executions", async (req, res, next) => {
     return next(error);
   } finally {
     client?.release();
+  }
+});
+
+app.patch("/api/executions/:id/status", async (req, res, next) => {
+  const { id } = req.params;
+
+  if (!isValidWorkflowId(id)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_EXECUTION_ID",
+        message: "Execution ID must be a positive integer",
+      },
+    });
+  }
+
+  const validation = updateExecutionStatusSchema.safeParse(req.body);
+
+  if (!validation.success) {
+    return res.status(400).json({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Invalid execution status",
+        details: validation.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
+        })),
+      },
+    });
+  }
+
+  const { status } = validation.data;
+
+  try {
+    const result = await pool.query(
+      `UPDATE executions
+       SET status = $1,
+           started_at = CASE
+             WHEN $1 = 'running' THEN NOW()
+             ELSE started_at
+           END,
+           finished_at = CASE
+             WHEN $1 IN ('completed', 'failed') THEN NOW()
+             ELSE finished_at
+           END
+       WHERE id = $2
+         AND (
+           (status = 'pending' AND $1 = 'running')
+           OR (status = 'running' AND $1 IN ('completed', 'failed'))
+         )
+       RETURNING id, workflow_id, status, started_at, finished_at, created_at`,
+      [status, id],
+    );
+
+    if (result.rows.length === 0) {
+      const executionResult = await pool.query(
+        "SELECT id, status FROM executions WHERE id = $1",
+        [id],
+      );
+
+      if (executionResult.rows.length === 0) {
+        return res.status(404).json({
+          error: {
+            code: "EXECUTION_NOT_FOUND",
+            message: "Execution not found",
+          },
+        });
+      }
+
+      return res.status(409).json({
+        error: {
+          code: "INVALID_STATUS_TRANSITION",
+          message: `Cannot transition from ${executionResult.rows[0].status} to ${status}`,
+        },
+      });
+    }
+
+    return res.status(200).json({
+      execution: result.rows[0],
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 
