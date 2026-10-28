@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
+import executionQueue from "./queues/executionQueue.js";
 
 const mockClient = {
   query: vi.fn(),
@@ -9,11 +10,17 @@ const mockClient = {
 beforeEach(() => {
   vi.clearAllMocks();
   pool.connect = vi.fn().mockResolvedValue(mockClient);
+  executionQueue.add.mockResolvedValue({ id: "test-job-id" });
 });
 
 vi.mock("./db.js", () => ({
   default: {
     query: vi.fn(),
+  },
+}));
+vi.mock("./queues/executionQueue.js", () => ({
+  default: {
+    add: vi.fn(),
   },
 }));
 
@@ -212,6 +219,19 @@ describe("POST /api/workflows/:id/executions", () => {
     expect(mockClient.query).toHaveBeenCalledWith("BEGIN");
     expect(mockClient.query).toHaveBeenCalledWith("COMMIT");
     expect(mockClient.release).toHaveBeenCalledOnce();
+    expect(executionQueue.add).toHaveBeenCalledWith(
+      "process-execution",
+      {
+        executionId: "10",
+      },
+      {
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 1000,
+        },
+      },
+    );
   });
 
   it("returns 404 when the workflow does not exist", async () => {
@@ -297,6 +317,39 @@ describe("POST /api/workflows/:id/executions", () => {
     expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
     expect(mockClient.query).not.toHaveBeenCalled();
     expect(mockClient.release).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when queue submission fails after commit", async () => {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({
+        rows: [{ id: "1", is_active: true }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "10",
+            workflow_id: "1",
+            status: "pending",
+            started_at: null,
+            finished_at: null,
+            created_at: "2026-10-21T13:00:00.000Z",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] }); // COMMIT
+
+    executionQueue.add.mockRejectedValueOnce(new Error("Redis unavailable"));
+
+    const response = await request(app).post("/api/workflows/1/executions");
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(mockClient.query).toHaveBeenCalledWith("COMMIT");
+    expect(
+      mockClient.query.mock.calls.some(([sql]) => sql === "ROLLBACK"),
+    ).toBe(false);
+    expect(mockClient.release).toHaveBeenCalledOnce();
   });
 
   describe("GET /api/workflows/:id/executions", () => {

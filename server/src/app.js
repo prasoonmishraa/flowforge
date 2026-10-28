@@ -9,6 +9,7 @@ import {
 } from "./validators/workflowValidator.js";
 import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
 import { updateExecutionStatusSchema } from "./validators/executionValidator.js";
+import executionQueue from "./queues/executionQueue.js";
 
 const app = express();
 
@@ -182,10 +183,12 @@ app.post("/api/workflows/:id/executions", async (req, res, next) => {
   }
 
   let client;
+  let transactionOpen = false;
 
   try {
     client = await pool.connect();
     await client.query("BEGIN");
+    transactionOpen = true;
 
     const workflowResult = await client.query(
       `SELECT id, is_active
@@ -225,12 +228,27 @@ app.post("/api/workflows/:id/executions", async (req, res, next) => {
     );
 
     await client.query("COMMIT");
+    transactionOpen = false;
+
+    const execution = executionResult.rows[0];
+
+    await executionQueue.add(
+      "process-execution",
+      { executionId: execution.id },
+      {
+        attempts: 3,
+        backoff: {
+          type: "exponential",
+          delay: 1000,
+        },
+      },
+    );
 
     return res.status(201).json({
-      execution: executionResult.rows[0],
+      execution,
     });
   } catch (error) {
-    if (client) {
+    if (client && transactionOpen) {
       try {
         await client.query("ROLLBACK");
       } catch (rollbackError) {
