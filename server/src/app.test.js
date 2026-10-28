@@ -225,6 +225,7 @@ describe("POST /api/workflows/:id/executions", () => {
         executionId: "10",
       },
       {
+        jobId: "execution-10",
         attempts: 3,
         backoff: {
           type: "exponential",

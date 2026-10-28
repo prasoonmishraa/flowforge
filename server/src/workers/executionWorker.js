@@ -2,6 +2,7 @@ import "dotenv/config";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import pool from "../db.js";
+import { processExecution } from "./processExecution.js";
 
 const connection = new IORedis({
   host: process.env.REDIS_HOST,
@@ -9,67 +10,9 @@ const connection = new IORedis({
   maxRetriesPerRequest: null,
 });
 
-const worker = new Worker(
-  "execution",
-  async (job) => {
-    const { executionId } = job.data;
-
-    const startResult = await pool.query(
-      `UPDATE executions
-     SET status = 'running',
-         started_at = COALESCE(started_at, NOW())
-     WHERE id = $1
-       AND status = 'pending'
-     RETURNING id`,
-      [executionId],
-    );
-
-    if (startResult.rowCount === 0) {
-      const existingResult = await pool.query(
-        `SELECT id, status
-       FROM executions
-       WHERE id = $1`,
-        [executionId],
-      );
-
-      if (existingResult.rows.length === 0) {
-        throw new Error(`Execution ${executionId} not found`);
-      }
-
-      if (existingResult.rows[0].status !== "running") {
-        throw new Error(
-          `Execution ${executionId} cannot run from status ${existingResult.rows[0].status}`,
-        );
-      }
-    }
-
-    console.log(`Processing execution ${executionId}`);
-    console.log("Job data:", job.data);
-
-    // Placeholder for the actual workflow steps.
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-
-    const completionResult = await pool.query(
-      `UPDATE executions
-       SET status = 'completed',
-           finished_at = NOW()
-       WHERE id = $1
-         AND status = 'running'
-       RETURNING id`,
-      [executionId],
-    );
-
-    if (completionResult.rowCount === 0) {
-      throw new Error(`Execution ${executionId} could not be marked completed`);
-    }
-
-    return {
-      executionId,
-      status: "completed",
-    };
-  },
-  { connection },
-);
+const worker = new Worker("execution", processExecution, {
+  connection,
+});
 
 worker.on("completed", (job, result) => {
   console.log(`Job ${job.id} completed:`, result);

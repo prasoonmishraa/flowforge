@@ -236,6 +236,7 @@ app.post("/api/workflows/:id/executions", async (req, res, next) => {
       "process-execution",
       { executionId: execution.id },
       {
+        jobId: `execution-${execution.id}`,
         attempts: 3,
         backoff: {
           type: "exponential",
