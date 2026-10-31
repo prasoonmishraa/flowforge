@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
 import pool from "../../src/db.js";
 import { claimExecution } from "../../src/workers/claimExecution.js";
 import { renewExecutionLease } from "../../src/workers/renewExecutionLease.js";
 import { handleExecutionFailure } from "../../src/workers/handleExecutionFailure.js";
+import { findExpiredExecutions } from "../../src/workers/findExpiredExecutions.js";
 
 if (process.env.DB_NAME !== "flowforge_test") {
   throw new Error(
@@ -181,5 +181,32 @@ describe("Execution lease integration", () => {
     expect(new Date(storedResult.rows[0].locked_until).getTime()).toBeLessThan(
       Date.now(),
     );
+  });
+  it("finds executions with expired leases", async () => {
+    const executionId = await createPendingExecution();
+
+    // Claim the execution to create a running lease.
+    const claim = await claimExecution(executionId);
+
+    expect(claim).not.toBeNull();
+
+    // Simulate a worker crash by expiring its lease.
+    await pool.query(
+      `UPDATE executions
+     SET locked_until = NOW() - INTERVAL '1 second'
+     WHERE id = $1`,
+      [executionId],
+    );
+
+    // Run the actual recovery query.
+    const expiredExecutions = await findExpiredExecutions();
+
+    const recoveredCandidate = expiredExecutions.find(
+      (execution) => execution.id === executionId,
+    );
+
+    expect(recoveredCandidate).toBeDefined();
+    expect(recoveredCandidate.status).toBe("running");
+    expect(recoveredCandidate.worker_token).toBe(claim.worker_token);
   });
 });
