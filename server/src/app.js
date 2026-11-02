@@ -9,7 +9,6 @@ import {
 } from "./validators/workflowValidator.js";
 import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
 import { updateExecutionStatusSchema } from "./validators/executionValidator.js";
-import executionQueue from "./queues/executionQueue.js";
 
 const app = express();
 
@@ -226,24 +225,26 @@ app.post("/api/workflows/:id/executions", async (req, res, next) => {
        RETURNING id, workflow_id, status, started_at, finished_at, created_at`,
       [req.params.id, "pending"],
     );
+    const execution = executionResult.rows[0];
+
+    await client.query(
+      `INSERT INTO outbox_events (
+        event_type,
+        aggregate_id,
+        payload
+      )
+      VALUES ($1, $2, $3)`,
+      [
+        "EXECUTION_REQUESTED",
+        execution.id,
+        JSON.stringify({
+          executionId: execution.id,
+        }),
+      ],
+    );
 
     await client.query("COMMIT");
     transactionOpen = false;
-
-    const execution = executionResult.rows[0];
-
-    await executionQueue.add(
-      "process-execution",
-      { executionId: execution.id },
-      {
-        jobId: `execution-${execution.id}`,
-        attempts: 3,
-        backoff: {
-          type: "exponential",
-          delay: 1000,
-        },
-      },
-    );
 
     return res.status(201).json({
       execution,

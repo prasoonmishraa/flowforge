@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import request from "supertest";
-import executionQueue from "./queues/executionQueue.js";
 
 const mockClient = {
   query: vi.fn(),
@@ -10,17 +9,11 @@ const mockClient = {
 beforeEach(() => {
   vi.clearAllMocks();
   pool.connect = vi.fn().mockResolvedValue(mockClient);
-  executionQueue.add.mockResolvedValue({ id: "test-job-id" });
 });
 
 vi.mock("./db.js", () => ({
   default: {
     query: vi.fn(),
-  },
-}));
-vi.mock("./queues/executionQueue.js", () => ({
-  default: {
-    add: vi.fn(),
   },
 }));
 
@@ -196,7 +189,7 @@ describe("POST /api/workflows/:id/executions", () => {
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
       .mockResolvedValueOnce({
         rows: [{ id: "1", is_active: true }],
-      })
+      }) // SELECT workflow
       .mockResolvedValueOnce({
         rows: [
           {
@@ -208,7 +201,8 @@ describe("POST /api/workflows/:id/executions", () => {
             created_at: "2026-10-21T13:00:00.000Z",
           },
         ],
-      })
+      }) // INSERT execution
+      .mockResolvedValueOnce({ rows: [] }) // INSERT outbox event
       .mockResolvedValueOnce({ rows: [] }); // COMMIT
 
     const response = await request(app).post("/api/workflows/1/executions");
@@ -216,23 +210,38 @@ describe("POST /api/workflows/:id/executions", () => {
     expect(response.status).toBe(201);
     expect(response.body.execution.status).toBe("pending");
     expect(response.body.execution.workflow_id).toBe("1");
+
     expect(mockClient.query).toHaveBeenCalledWith("BEGIN");
+
+    expect(mockClient.query).toHaveBeenCalledWith(
+      expect.stringContaining("INSERT INTO outbox_events"),
+      [
+        "EXECUTION_REQUESTED",
+        "10",
+        JSON.stringify({
+          executionId: "10",
+        }),
+      ],
+    );
+
     expect(mockClient.query).toHaveBeenCalledWith("COMMIT");
     expect(mockClient.release).toHaveBeenCalledOnce();
-    expect(executionQueue.add).toHaveBeenCalledWith(
-      "process-execution",
-      {
-        executionId: "10",
-      },
-      {
-        jobId: "execution-10",
-        attempts: 3,
-        backoff: {
-          type: "exponential",
-          delay: 1000,
-        },
-      },
+
+    const queries = mockClient.query.mock.calls.map(([sql]) => sql);
+
+    expect(queries.indexOf("BEGIN")).toBeLessThan(
+      queries.findIndex((sql) => sql.includes("INSERT INTO executions")),
     );
+
+    expect(
+      queries.findIndex((sql) => sql.includes("INSERT INTO executions")),
+    ).toBeLessThan(
+      queries.findIndex((sql) => sql.includes("INSERT INTO outbox_events")),
+    );
+
+    expect(
+      queries.findIndex((sql) => sql.includes("INSERT INTO outbox_events")),
+    ).toBeLessThan(queries.indexOf("COMMIT"));
   });
 
   it("returns 404 when the workflow does not exist", async () => {
@@ -320,12 +329,12 @@ describe("POST /api/workflows/:id/executions", () => {
     expect(mockClient.release).not.toHaveBeenCalled();
   });
 
-  it("returns 500 when queue submission fails after commit", async () => {
+  it("rolls back execution creation when outbox insertion fails", async () => {
     mockClient.query
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
       .mockResolvedValueOnce({
         rows: [{ id: "1", is_active: true }],
-      })
+      }) // SELECT workflow
       .mockResolvedValueOnce({
         rows: [
           {
@@ -337,19 +346,21 @@ describe("POST /api/workflows/:id/executions", () => {
             created_at: "2026-10-21T13:00:00.000Z",
           },
         ],
-      })
-      .mockResolvedValueOnce({ rows: [] }); // COMMIT
-
-    executionQueue.add.mockRejectedValueOnce(new Error("Redis unavailable"));
+      }) // INSERT execution
+      .mockRejectedValueOnce(new Error("Outbox insertion failed"))
+      .mockResolvedValueOnce({ rows: [] });
 
     const response = await request(app).post("/api/workflows/1/executions");
 
     expect(response.status).toBe(500);
     expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
-    expect(mockClient.query).toHaveBeenCalledWith("COMMIT");
-    expect(
-      mockClient.query.mock.calls.some(([sql]) => sql === "ROLLBACK"),
-    ).toBe(false);
+
+    expect(mockClient.query).toHaveBeenCalledWith("ROLLBACK");
+
+    expect(mockClient.query.mock.calls.some(([sql]) => sql === "COMMIT")).toBe(
+      false,
+    );
+
     expect(mockClient.release).toHaveBeenCalledOnce();
   });
 
