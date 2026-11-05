@@ -108,22 +108,51 @@ describe("Outbox event claiming", () => {
 
   it("reclaims an event whose publisher lease has expired", async () => {
     const eventId = await createEvent();
+    const oldLockToken = "00000000-0000-4000-8000-000000000001";
 
     await pool.query(
       `UPDATE outbox_events
-       SET lock_token = gen_random_uuid(),
+       SET lock_token = $2,
            locked_until = NOW() - INTERVAL '1 second'
        WHERE id = $1`,
-      [eventId],
+      [eventId, oldLockToken],
     );
 
     const claimedEvents = await claimOutboxEvents(1);
 
     expect(claimedEvents).toHaveLength(1);
     expect(claimedEvents[0].id).toBe(eventId);
-    expect(claimedEvents[0].lock_token).toBeTruthy();
+    expect(claimedEvents[0].lock_token).not.toBe(oldLockToken);
+
     expect(new Date(claimedEvents[0].locked_until).getTime()).toBeGreaterThan(
       Date.now(),
     );
+  });
+
+  it("does not claim an event before its retry time", async () => {
+    const eventId = await createEvent();
+
+    await pool.query(
+      `UPDATE outbox_events
+       SET next_attempt_at = NOW() + INTERVAL '5 minutes'
+       WHERE id = $1`,
+      [eventId],
+    );
+
+    const earlyClaim = await claimOutboxEvents(10);
+
+    expect(earlyClaim.some((event) => event.id === eventId)).toBe(false);
+
+    // Simulate the retry time having arrived without waiting five minutes.
+    await pool.query(
+      `UPDATE outbox_events
+       SET next_attempt_at = NOW() - INTERVAL '1 second'
+       WHERE id = $1`,
+      [eventId],
+    );
+
+    const eligibleClaim = await claimOutboxEvents(10);
+
+    expect(eligibleClaim.some((event) => event.id === eventId)).toBe(true);
   });
 });
