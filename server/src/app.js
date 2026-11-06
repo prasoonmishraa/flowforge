@@ -9,6 +9,7 @@ import {
 } from "./validators/workflowValidator.js";
 import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
 import { updateExecutionStatusSchema } from "./validators/executionValidator.js";
+import { getOutboxStats } from "./services/getOutboxStats.js";
 
 const app = express();
 
@@ -24,6 +25,18 @@ app.get("/api/health", (req, res) => {
     status: "ok",
     service: "flowforge-api",
   });
+});
+
+app.get("/api/metrics/outbox", async (req, res, next) => {
+  try {
+    const stats = await getOutboxStats();
+
+    return res.status(200).json({
+      outbox: stats,
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 app.get("/api/workflows", async (req, res, next) => {
