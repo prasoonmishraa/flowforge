@@ -25,6 +25,10 @@ describe("publishOutboxEvent", () => {
     id: "15",
     event_type: "EXECUTION_REQUESTED",
     aggregate_id: "42",
+    payload: {
+      executionId: "42",
+      requestId: "test-request-123",
+    },
     lock_token: "test-lock-token",
   };
 
@@ -42,7 +46,10 @@ describe("publishOutboxEvent", () => {
 
     expect(executionQueue.add).toHaveBeenCalledWith(
       "process-execution",
-      { executionId: "42" },
+      {
+        executionId: "42",
+        requestId: "test-request-123",
+      },
       {
         jobId: "execution-42",
         attempts: 3,

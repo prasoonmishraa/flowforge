@@ -213,16 +213,22 @@ describe("POST /api/workflows/:id/executions", () => {
 
     expect(mockClient.query).toHaveBeenCalledWith("BEGIN");
 
-    expect(mockClient.query).toHaveBeenCalledWith(
-      expect.stringContaining("INSERT INTO outbox_events"),
-      [
-        "EXECUTION_REQUESTED",
-        "10",
-        JSON.stringify({
-          executionId: "10",
-        }),
-      ],
+    const outboxInsertCall = mockClient.query.mock.calls.find(([sql]) =>
+      sql.includes("INSERT INTO outbox_events"),
     );
+
+    expect(outboxInsertCall).toBeDefined();
+    expect(outboxInsertCall[1][0]).toBe("EXECUTION_REQUESTED");
+    expect(outboxInsertCall[1][1]).toBe("10");
+
+    const outboxPayload = JSON.parse(outboxInsertCall[1][2]);
+
+    expect(outboxPayload).toMatchObject({
+      executionId: "10",
+    });
+
+    expect(outboxPayload.requestId).toBeDefined();
+    expect(typeof outboxPayload.requestId).toBe("string");
 
     expect(mockClient.query).toHaveBeenCalledWith("COMMIT");
     expect(mockClient.release).toHaveBeenCalledOnce();

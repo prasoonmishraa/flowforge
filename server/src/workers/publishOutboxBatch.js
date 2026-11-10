@@ -1,6 +1,7 @@
 import { claimOutboxEvents } from "./claimOutboxEvents.js";
 import { publishOutboxEvent } from "./publishOutboxEvent.js";
 import { handleOutboxPublishFailure } from "./handleOutboxPublishFailure.js";
+import logger from "../logger.js";
 
 export async function publishOutboxBatch(batchSize = 10) {
   const events = await claimOutboxEvents(batchSize);
@@ -14,6 +15,13 @@ export async function publishOutboxBatch(batchSize = 10) {
   };
 
   for (const event of events) {
+    const eventLogger = logger.child({
+      service: "flowforge-outbox-publisher",
+      executionId: event.aggregate_id,
+      outboxEventId: event.id,
+      requestId: event.payload?.requestId,
+    });
+
     try {
       const result = await publishOutboxEvent(event);
 
@@ -28,15 +36,20 @@ export async function publishOutboxBatch(batchSize = 10) {
 
         if (failureResult.handled) {
           summary.retryScheduledCount += 1;
+
+          eventLogger.warn(
+            { err: error, attempts: failureResult.attempts },
+            "Outbox event publishing failed; retry scheduled",
+          );
         } else {
           summary.ownershipLostCount += 1;
         }
       } catch (handlingError) {
         summary.failureHandlingErrorCount += 1;
 
-        console.error(
-          `Failed to record publishing failure for outbox event ${event.id}:`,
-          handlingError,
+        eventLogger.error(
+          { err: handlingError, publishError: error },
+          "Failed to record outbox publishing failure",
         );
       }
     }

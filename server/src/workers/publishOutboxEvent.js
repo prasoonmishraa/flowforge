@@ -1,5 +1,6 @@
 import pool from "../db.js";
 import executionQueue from "../queues/executionQueue.js";
+import logger from "../logger.js";
 
 export async function publishOutboxEvent(event) {
   if (event.event_type !== "EXECUTION_REQUESTED") {
@@ -10,10 +11,20 @@ export async function publishOutboxEvent(event) {
     throw new Error("Outbox event is missing its lock token");
   }
 
+  const executionLogger = logger.child({
+    service: "flowforge-outbox-publisher",
+    executionId: event.aggregate_id,
+    outboxEventId: event.id,
+    requestId: event.payload.requestId,
+  });
+
+  executionLogger.info("Publishing execution job to Redis");
+
   await executionQueue.add(
     "process-execution",
     {
       executionId: event.aggregate_id,
+      requestId: event.payload.requestId,
     },
     {
       jobId: `execution-${event.aggregate_id}`,
@@ -39,11 +50,17 @@ export async function publishOutboxEvent(event) {
   );
 
   if (result.rowCount === 0) {
+    executionLogger.warn(
+      "Publisher lease lost before publication was recorded",
+    );
+
     return {
       published: false,
       reason: "publisher_lease_lost",
     };
   }
+
+  executionLogger.info("Execution job published successfully");
 
   return {
     published: true,

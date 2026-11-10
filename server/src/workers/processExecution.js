@@ -2,9 +2,16 @@ import pool from "../db.js";
 import { claimExecution } from "./claimExecution.js";
 import { renewExecutionLease } from "./renewExecutionLease.js";
 import { runWithHeartbeat } from "./runWithHeartbeat.js";
+import logger from "../logger.js";
 
 export async function processExecution(job) {
-  const { executionId } = job.data;
+  const { executionId, requestId } = job.data;
+
+  const executionLogger = logger.child({
+    service: "flowforge-worker",
+    executionId,
+    requestId,
+  });
 
   const claim = await claimExecution(executionId);
 
@@ -39,23 +46,23 @@ export async function processExecution(job) {
       );
 
       if (releaseResult.rowCount === 0) {
-        console.error(
-          `Could not release execution ${executionId}: worker ownership was lost`,
+        executionLogger.warn(
+          "Could not release execution: worker ownership was lost",
         );
       }
     } catch (releaseError) {
       error.releaseError = releaseError;
 
-      console.error(
-        `Failed to release execution ${executionId}:`,
-        releaseError,
+      executionLogger.error(
+        { err: releaseError },
+        "Failed to release execution",
       );
     }
 
     throw error;
   }
 
-  console.log(`Processing execution ${executionId}`);
+  executionLogger.info("Execution processing started");
 
   const renewalResult = await renewExecutionLease(executionId, workerToken);
 
@@ -97,6 +104,8 @@ export async function processExecution(job) {
   if (completionResult.rowCount === 0) {
     throw new Error(`Execution ${executionId} could not be marked completed`);
   }
+
+  executionLogger.info("Execution processing completed");
 
   return {
     executionId,

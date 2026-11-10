@@ -1,11 +1,15 @@
 import "dotenv/config";
-import IORedis from "ioredis";
 import pool from "../db.js";
 import executionQueue from "../queues/executionQueue.js";
+import logger from "../logger.js";
 import { publishOutboxBatch } from "./publishOutboxBatch.js";
 
 const PUBLISH_INTERVAL = 3000;
 const BATCH_SIZE = 10;
+
+const publisherLogger = logger.child({
+  service: "flowforge-outbox-publisher",
+});
 
 let scanInProgress = false;
 let shutdownRequested = false;
@@ -23,10 +27,10 @@ async function runPublisherScan() {
       const result = await publishOutboxBatch(BATCH_SIZE);
 
       if (result.claimedCount > 0) {
-        console.log("Outbox publisher scan:", result);
+        publisherLogger.info({ ...result }, "Outbox publisher scan completed");
       }
     } catch (error) {
-      console.error("Outbox publisher scan failed:", error);
+      publisherLogger.error({ err: error }, "Outbox publisher scan failed");
     }
   })();
 
@@ -40,7 +44,7 @@ async function runPublisherScan() {
 
 const publisherInterval = setInterval(runPublisherScan, PUBLISH_INTERVAL);
 
-console.log("Outbox publisher started");
+publisherLogger.info("Outbox publisher started");
 
 let shutdownPromise;
 
@@ -52,15 +56,13 @@ async function shutdown(signal) {
   shutdownRequested = true;
   clearInterval(publisherInterval);
 
-  console.log(`${signal} received. Shutting down outbox publisher...`);
+  publisherLogger.info({ signal }, "Shutting down outbox publisher");
 
   shutdownPromise = (async () => {
-    // Allow an active publishing scan to finish.
     if (activeScan) {
       await activeScan;
     }
 
-    // Close Redis and PostgreSQL connections.
     const results = await Promise.allSettled([
       executionQueue.close(),
       pool.end(),
@@ -69,10 +71,14 @@ async function shutdown(signal) {
     const failures = results.filter((result) => result.status === "rejected");
 
     if (failures.length > 0) {
-      console.error("Errors occurred during publisher shutdown:", failures);
+      publisherLogger.error(
+        { failures },
+        "Errors occurred during publisher shutdown",
+      );
+
       process.exitCode = 1;
     } else {
-      console.log("Outbox publisher shut down successfully");
+      publisherLogger.info("Outbox publisher shut down successfully");
     }
   })();
 
@@ -87,5 +93,4 @@ process.on("SIGTERM", () => {
   void shutdown("SIGTERM");
 });
 
-// Process existing events immediately instead of waiting 3 seconds.
 await runPublisherScan();

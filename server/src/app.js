@@ -10,6 +10,9 @@ import {
 import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
 import { updateExecutionStatusSchema } from "./validators/executionValidator.js";
 import { getOutboxStats } from "./services/getOutboxStats.js";
+import { randomUUID } from "node:crypto";
+import pinoHttp from "pino-http";
+import logger from "./logger.js";
 
 const app = express();
 
@@ -18,6 +21,20 @@ app.use(helmet());
 app.use(cors());
 
 app.use(express.json());
+
+app.use(
+  pinoHttp({
+    logger: logger.child({
+      service: "flowforge-api",
+    }),
+    genReqId: () => randomUUID(),
+  }),
+);
+
+app.use((req, res, next) => {
+  res.setHeader("X-Request-Id", req.id);
+  next();
+});
 
 // Health-check endpoint
 app.get("/api/health", (req, res) => {
@@ -252,6 +269,7 @@ app.post("/api/workflows/:id/executions", async (req, res, next) => {
         execution.id,
         JSON.stringify({
           executionId: execution.id,
+          requestId: req.id,
         }),
       ],
     );

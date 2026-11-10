@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import logger from "../logger.js";
 
 vi.mock("./claimOutboxEvents.js", () => ({
   claimOutboxEvents: vi.fn(),
@@ -116,18 +117,22 @@ describe("publishOutboxBatch", () => {
       new Error("Database unavailable"),
     );
 
-    const consoleError = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => {});
+    const errorLog = vi.fn();
+
+    const childLoggerSpy = vi.spyOn(logger, "child").mockReturnValue({
+      warn: vi.fn(),
+      error: errorLog,
+    });
 
     try {
       const result = await publishOutboxBatch();
 
       expect(result.failureHandlingErrorCount).toBe(1);
       expect(result.retryScheduledCount).toBe(0);
-      expect(consoleError).toHaveBeenCalledOnce();
+      expect(errorLog).toHaveBeenCalledOnce();
+      expect(childLoggerSpy).toHaveBeenCalledOnce();
     } finally {
-      consoleError.mockRestore();
+      childLoggerSpy.mockRestore();
     }
   });
 

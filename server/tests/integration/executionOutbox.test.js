@@ -1,10 +1,4 @@
-import {
-  afterAll,
-  beforeAll,
-  describe,
-  expect,
-  it,
-} from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 
 import pool from "../../src/db.js";
@@ -40,15 +34,11 @@ describe("Execution creation with transactional outbox", () => {
         [workflowId],
       );
 
-      await pool.query(
-        "DELETE FROM executions WHERE workflow_id = $1",
-        [workflowId],
-      );
+      await pool.query("DELETE FROM executions WHERE workflow_id = $1", [
+        workflowId,
+      ]);
 
-      await pool.query(
-        "DELETE FROM workflows WHERE id = $1",
-        [workflowId],
-      );
+      await pool.query("DELETE FROM workflows WHERE id = $1", [workflowId]);
     }
 
     await pool.end();
@@ -60,6 +50,8 @@ describe("Execution creation with transactional outbox", () => {
     );
 
     expect(response.status).toBe(201);
+    const requestId = response.headers["x-request-id"];
+    expect(requestId).toBeDefined();
     expect(response.body.execution.status).toBe("pending");
 
     const executionId = response.body.execution.id;
@@ -84,6 +76,7 @@ describe("Execution creation with transactional outbox", () => {
     expect(result.rows[0].aggregate_id).toBe(executionId);
     expect(result.rows[0].payload).toEqual({
       executionId,
+      requestId,
     });
   });
 });
