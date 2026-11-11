@@ -13,6 +13,7 @@ import { getOutboxStats } from "./services/getOutboxStats.js";
 import { randomUUID } from "node:crypto";
 import pinoHttp from "pino-http";
 import logger from "./logger.js";
+import { checkDependencyHealth } from "./services/checkDependencyHealth.js";
 
 const app = express();
 
@@ -42,6 +43,16 @@ app.get("/api/health", (req, res) => {
     status: "ok",
     service: "flowforge-api",
   });
+});
+
+app.get("/api/health/ready", async (req, res, next) => {
+  try {
+    const health = await checkDependencyHealth();
+
+    res.status(health.status === "ok" ? 200 : 503).json(health);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/metrics/outbox", async (req, res, next) => {

@@ -3,9 +3,17 @@ import pool from "../db.js";
 import executionQueue from "../queues/executionQueue.js";
 import logger from "../logger.js";
 import { publishOutboxBatch } from "./publishOutboxBatch.js";
+import IORedis from "ioredis";
+import { startHeartbeat } from "../services/heartbeat.js";
 
 const PUBLISH_INTERVAL = 3000;
 const BATCH_SIZE = 10;
+
+const heartbeatRedis = new IORedis({
+  host: process.env.REDIS_HOST,
+  port: Number(process.env.REDIS_PORT),
+  maxRetriesPerRequest: 1,
+});
 
 const publisherLogger = logger.child({
   service: "flowforge-outbox-publisher",
@@ -46,6 +54,11 @@ const publisherInterval = setInterval(runPublisherScan, PUBLISH_INTERVAL);
 
 publisherLogger.info("Outbox publisher started");
 
+const publisherHeartbeat = await startHeartbeat({
+  redis: heartbeatRedis,
+  service: "publisher",
+});
+
 let shutdownPromise;
 
 async function shutdown(signal) {
@@ -64,6 +77,8 @@ async function shutdown(signal) {
     }
 
     const results = await Promise.allSettled([
+      publisherHeartbeat.stop(),
+      heartbeatRedis.quit(),
       executionQueue.close(),
       pool.end(),
     ]);
