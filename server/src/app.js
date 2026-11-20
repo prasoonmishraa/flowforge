@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import pinoHttp from "pino-http";
 import logger from "./logger.js";
 import { checkDependencyHealth } from "./services/checkDependencyHealth.js";
+import { getExecutionStats } from "./services/getExecutionStats.js";
 
 const app = express();
 
@@ -61,6 +62,18 @@ app.get("/api/metrics/outbox", async (req, res, next) => {
 
     return res.status(200).json({
       outbox: stats,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/metrics/executions", async (req, res, next) => {
+  try {
+    const stats = await getExecutionStats();
+
+    return res.status(200).json({
+      executions: stats,
     });
   } catch (error) {
     return next(error);
