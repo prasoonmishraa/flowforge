@@ -7,6 +7,7 @@ import {
   createWorkflowSchema,
   updateWorkflowSchema,
 } from "./validators/workflowValidator.js";
+import { createWorkflowStepSchema } from "./validators/workflowStepValidator.js";
 import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
 import { updateExecutionStatusSchema } from "./validators/executionValidator.js";
 import { getOutboxStats } from "./services/getOutboxStats.js";
@@ -221,6 +222,102 @@ app.patch("/api/workflows/:id", async (req, res, next) => {
       workflow: result.rows[0],
     });
   } catch (error) {
+    return next(error);
+  }
+});
+
+app.post("/api/workflows/:id/steps", async (req, res, next) => {
+  // 1. Validate the workflow ID from the URL.
+  if (!isValidWorkflowId(req.params.id)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_WORKFLOW_ID",
+        message: "Workflow ID must be a positive integer",
+      },
+    });
+  }
+
+  // 2. Validate the request body.
+  const validation = createWorkflowStepSchema.safeParse(req.body);
+
+  if (!validation.success) {
+    return res.status(400).json({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Invalid workflow step data",
+        details: validation.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
+        })),
+      },
+    });
+  }
+
+  // 3. Extract validated values.
+  const { name, step_type, config, position } = validation.data;
+
+  try {
+    // 4. Check whether the parent workflow exists.
+    const workflowResult = await pool.query(
+      `SELECT id
+       FROM workflows
+       WHERE id = $1`,
+      [req.params.id],
+    );
+
+    if (workflowResult.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_NOT_FOUND",
+          message: "Workflow not found",
+        },
+      });
+    }
+
+    // 5. Insert the new workflow step.
+    const result = await pool.query(
+      `INSERT INTO workflow_steps (
+         workflow_id,
+         name,
+         step_type,
+         config,
+         position
+       )
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, workflow_id, name, step_type, config,
+                 position, created_at, updated_at`,
+      [req.params.id, name, step_type, config, position],
+    );
+
+    // 6. Return the created step.
+    return res.status(201).json({
+      step: result.rows[0],
+    });
+  } catch (error) {
+    // 7. Handle duplicate step positions.
+    if (
+      error.code === "23505" &&
+      error.constraint === "workflow_steps_workflow_position_unique"
+    ) {
+      return res.status(409).json({
+        error: {
+          code: "STEP_POSITION_CONFLICT",
+          message: "A step already exists at this position in the workflow",
+        },
+      });
+    }
+
+    // 8. Handle a workflow deleted during the request.
+    if (error.code === "23503") {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_NOT_FOUND",
+          message: "Workflow not found",
+        },
+      });
+    }
+
+    // 9. Forward unexpected errors to centralized error handling.
     return next(error);
   }
 });

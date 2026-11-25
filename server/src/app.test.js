@@ -532,3 +532,141 @@ describe("PATCH /api/executions/:id/status", () => {
     expect(pool.query).toHaveBeenCalledOnce();
   });
 });
+
+describe("POST /api/workflows/:id/steps", () => {
+  it("creates a workflow step when the input is valid", async () => {
+    pool.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "1" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "101",
+            workflow_id: "1",
+            name: "Generate Thumbnail",
+            step_type: "generate_thumbnail",
+            config: { format: "jpg", width: 1280 },
+            position: 1,
+            created_at: "2026-11-25T10:00:00.000Z",
+            updated_at: "2026-11-25T10:00:00.000Z",
+          },
+        ],
+      });
+
+    const response = await request(app)
+      .post("/api/workflows/1/steps")
+      .send({
+        name: "Generate Thumbnail",
+        step_type: "generate_thumbnail",
+        config: { format: "jpg", width: 1280 },
+        position: 1,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.step).toMatchObject({
+      id: "101",
+      workflow_id: "1",
+      name: "Generate Thumbnail",
+      step_type: "generate_thumbnail",
+      config: { format: "jpg", width: 1280 },
+      position: 1,
+    });
+
+    expect(pool.query).toHaveBeenCalledTimes(2);
+
+    expect(pool.query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("FROM workflows"),
+      ["1"],
+    );
+
+    expect(pool.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("INSERT INTO workflow_steps"),
+      [
+        "1",
+        "Generate Thumbnail",
+        "generate_thumbnail",
+        { format: "jpg", width: 1280 },
+        1,
+      ],
+    );
+  });
+
+  it("rejects an invalid workflow ID without querying the database", async () => {
+    const response = await request(app).post("/api/workflows/abc/steps").send({
+      name: "Generate Thumbnail",
+      step_type: "generate_thumbnail",
+      position: 1,
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_WORKFLOW_ID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid step data without querying the database", async () => {
+    const response = await request(app).post("/api/workflows/1/steps").send({
+      name: "",
+      step_type: "generate_thumbnail",
+      position: 1.5,
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when the workflow does not exist", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app).post("/api/workflows/999/steps").send({
+      name: "Generate Thumbnail",
+      step_type: "generate_thumbnail",
+      position: 1,
+    });
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+    expect(pool.query).toHaveBeenCalledOnce();
+  });
+
+  it("returns 409 when the step position already exists", async () => {
+    const duplicatePositionError = Object.assign(
+      new Error("Duplicate workflow step position"),
+      {
+        code: "23505",
+        constraint: "workflow_steps_workflow_position_unique",
+      },
+    );
+
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: "1" }] })
+      .mockRejectedValueOnce(duplicatePositionError);
+
+    const response = await request(app).post("/api/workflows/1/steps").send({
+      name: "Generate Thumbnail",
+      step_type: "generate_thumbnail",
+      position: 1,
+    });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe("STEP_POSITION_CONFLICT");
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles an unexpected database error", async () => {
+    pool.query.mockRejectedValueOnce(new Error("Database connection failed"));
+
+    const response = await request(app).post("/api/workflows/1/steps").send({
+      name: "Generate Thumbnail",
+      step_type: "generate_thumbnail",
+      position: 1,
+    });
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
+    expect(pool.query).toHaveBeenCalledOnce();
+  });
+});
