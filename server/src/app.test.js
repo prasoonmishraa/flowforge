@@ -670,3 +670,327 @@ describe("POST /api/workflows/:id/steps", () => {
     expect(pool.query).toHaveBeenCalledOnce();
   });
 });
+
+describe("GET /api/workflows/:id/steps", () => {
+  it("returns all steps belonging to a workflow", async () => {
+    pool.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "1" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "101",
+            workflow_id: "1",
+            name: "Upload Video",
+            step_type: "upload_video",
+            config: {},
+            position: 1,
+          },
+          {
+            id: "102",
+            workflow_id: "1",
+            name: "Generate Thumbnail",
+            step_type: "generate_thumbnail",
+            config: { format: "jpg" },
+            position: 2,
+          },
+        ],
+      });
+
+    const response = await request(app).get("/api/workflows/1/steps");
+
+    expect(response.status).toBe(200);
+    expect(response.body.steps).toHaveLength(2);
+    expect(response.body.steps[0].name).toBe("Upload Video");
+    expect(response.body.steps[1].name).toBe("Generate Thumbnail");
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns an empty array when a workflow has no steps", async () => {
+    pool.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "1" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [],
+      });
+
+    const response = await request(app).get("/api/workflows/1/steps");
+
+    expect(response.status).toBe(200);
+    expect(response.body.steps).toEqual([]);
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns 404 when the workflow does not exist", async () => {
+    pool.query.mockResolvedValueOnce({
+      rows: [],
+    });
+
+    const response = await request(app).get("/api/workflows/999/steps");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+    expect(pool.query).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an invalid workflow ID without querying the database", async () => {
+    const response = await request(app).get("/api/workflows/abc/steps");
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_WORKFLOW_ID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/workflows/:id/steps/:stepId", () => {
+  it("returns a step belonging to the workflow", async () => {
+    pool.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "1" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: "101",
+            workflow_id: "1",
+            name: "Generate Thumbnail",
+            step_type: "generate_thumbnail",
+            config: { format: "jpg" },
+            position: 1,
+          },
+        ],
+      });
+
+    const response = await request(app).get("/api/workflows/1/steps/101");
+
+    expect(response.status).toBe(200);
+    expect(response.body.step.id).toBe("101");
+    expect(response.body.step.workflow_id).toBe("1");
+    expect(pool.query).toHaveBeenCalledTimes(2);
+
+    expect(pool.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("AND workflow_id = $2"),
+      ["101", "1"],
+    );
+  });
+
+  it("returns 404 when the workflow does not exist", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app).get("/api/workflows/999/steps/101");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+    expect(pool.query).toHaveBeenCalledOnce();
+  });
+
+  it("returns 404 when the step does not belong to the workflow", async () => {
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: "1" }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app).get("/api/workflows/1/steps/202");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_STEP_NOT_FOUND");
+  });
+
+  it("rejects invalid IDs without querying the database", async () => {
+    const response = await request(app).get("/api/workflows/1/steps/abc");
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_ID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+});
+describe("PATCH /api/workflows/:id/steps/:stepId", () => {
+  it("updates a workflow step", async () => {
+    const updatedStep = {
+      id: "10",
+      workflow_id: "1",
+      name: "Compress Video",
+      step_type: "video_compression",
+      config: { quality: "high" },
+      position: 2,
+      created_at: "2026-11-26T10:00:00.000Z",
+      updated_at: "2026-11-26T11:00:00.000Z",
+    };
+
+    pool.query
+      .mockResolvedValueOnce({
+        rows: [{ id: "1" }],
+      })
+      .mockResolvedValueOnce({
+        rows: [updatedStep],
+      });
+
+    const response = await request(app)
+      .patch("/api/workflows/1/steps/10")
+      .send({ name: "Compress Video" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.step).toEqual(updatedStep);
+
+    expect(pool.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("UPDATE workflow_steps"),
+      ["Compress Video", "10", "1"],
+    );
+
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+  it("returns 404 when the workflow does not exist", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app)
+      .patch("/api/workflows/999/steps/10")
+      .send({ name: "Updated Step" });
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 404 when the step does not belong to the workflow", async () => {
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: "1" }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app)
+      .patch("/api/workflows/1/steps/10")
+      .send({ name: "Updated Step" });
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_STEP_NOT_FOUND");
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects an empty update body", async () => {
+    const response = await request(app)
+      .patch("/api/workflows/1/steps/10")
+      .send({});
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid step data", async () => {
+    const response = await request(app)
+      .patch("/api/workflows/1/steps/10")
+      .send({ position: 0 });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid workflow or step IDs", async () => {
+    const response = await request(app)
+      .patch("/api/workflows/abc/steps/10")
+      .send({ name: "Updated Step" });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_ID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 when the updated position is already occupied", async () => {
+    const duplicatePositionError = new Error("Duplicate position");
+    duplicatePositionError.code = "23505";
+    duplicatePositionError.constraint =
+      "workflow_steps_workflow_position_unique";
+
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: "1" }] })
+      .mockRejectedValueOnce(duplicatePositionError);
+
+    const response = await request(app)
+      .patch("/api/workflows/1/steps/10")
+      .send({ position: 2 });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe("STEP_POSITION_CONFLICT");
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+
+  it("forwards unexpected database errors to the error handler", async () => {
+    pool.query.mockRejectedValueOnce(new Error("Database unavailable"));
+
+    const response = await request(app)
+      .patch("/api/workflows/1/steps/10")
+      .send({ name: "Updated Step" });
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
+  });
+});
+describe("DELETE /api/workflows/:id/steps/:stepId", () => {
+  it("deletes a workflow step", async () => {
+    const deletedStep = {
+      id: "10",
+      workflow_id: "1",
+      name: "Compress Video",
+      step_type: "video_compression",
+      config: { quality: "high" },
+      position: 2,
+      created_at: "2026-11-26T10:00:00.000Z",
+      updated_at: "2026-11-26T11:00:00.000Z",
+    };
+
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: "1" }] })
+      .mockResolvedValueOnce({ rows: [deletedStep] });
+
+    const response = await request(app).delete("/api/workflows/1/steps/10");
+
+    expect(response.status).toBe(200);
+    expect(response.body.step).toEqual(deletedStep);
+    expect(pool.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("DELETE FROM workflow_steps"),
+      ["10", "1"],
+    );
+  });
+
+  it("returns 404 when the workflow does not exist", async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app).delete("/api/workflows/999/steps/10");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_NOT_FOUND");
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 404 when the step does not belong to the workflow", async () => {
+    pool.query
+      .mockResolvedValueOnce({ rows: [{ id: "1" }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    const response = await request(app).delete("/api/workflows/1/steps/10");
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("WORKFLOW_STEP_NOT_FOUND");
+  });
+
+  it("rejects invalid workflow or step IDs", async () => {
+    const response = await request(app).delete("/api/workflows/abc/steps/10");
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("INVALID_ID");
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it("forwards unexpected database errors to the error handler", async () => {
+    pool.query.mockRejectedValueOnce(new Error("Database unavailable"));
+
+    const response = await request(app).delete("/api/workflows/1/steps/10");
+
+    expect(response.status).toBe(500);
+    expect(response.body.error.code).toBe("INTERNAL_SERVER_ERROR");
+  });
+});

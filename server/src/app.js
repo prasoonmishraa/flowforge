@@ -7,7 +7,10 @@ import {
   createWorkflowSchema,
   updateWorkflowSchema,
 } from "./validators/workflowValidator.js";
-import { createWorkflowStepSchema } from "./validators/workflowStepValidator.js";
+import {
+  createWorkflowStepSchema,
+  updateWorkflowStepSchema,
+} from "./validators/workflowStepValidator.js";
 import { isValidWorkflowId } from "./utils/validateWorkflowId.js";
 import { updateExecutionStatusSchema } from "./validators/executionValidator.js";
 import { getOutboxStats } from "./services/getOutboxStats.js";
@@ -318,6 +321,253 @@ app.post("/api/workflows/:id/steps", async (req, res, next) => {
     }
 
     // 9. Forward unexpected errors to centralized error handling.
+    return next(error);
+  }
+});
+
+app.get("/api/workflows/:id/steps", async (req, res, next) => {
+  const { id } = req.params;
+
+  if (!isValidWorkflowId(id)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_WORKFLOW_ID",
+        message: "Workflow ID must be a positive integer",
+      },
+    });
+  }
+
+  try {
+    const workflowResult = await pool.query(
+      `SELECT id
+       FROM workflows
+       WHERE id = $1`,
+      [id],
+    );
+
+    if (workflowResult.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_NOT_FOUND",
+          message: "Workflow not found",
+        },
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT id, workflow_id, name, step_type, config,
+              position, created_at, updated_at
+       FROM workflow_steps
+       WHERE workflow_id = $1
+       ORDER BY position ASC`,
+      [id],
+    );
+
+    return res.status(200).json({
+      steps: result.rows,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.get("/api/workflows/:id/steps/:stepId", async (req, res, next) => {
+  const { id, stepId } = req.params;
+
+  if (!isValidWorkflowId(id) || !isValidWorkflowId(stepId)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_ID",
+        message: "Workflow ID and step ID must be positive integers",
+      },
+    });
+  }
+
+  try {
+    const workflowResult = await pool.query(
+      `SELECT id
+       FROM workflows
+       WHERE id = $1`,
+      [id],
+    );
+
+    if (workflowResult.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_NOT_FOUND",
+          message: "Workflow not found",
+        },
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT id, workflow_id, name, step_type, config,
+              position, created_at, updated_at
+       FROM workflow_steps
+       WHERE id = $1
+         AND workflow_id = $2`,
+      [stepId, id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_STEP_NOT_FOUND",
+          message: "Workflow step not found",
+        },
+      });
+    }
+
+    return res.status(200).json({
+      step: result.rows[0],
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+app.patch("/api/workflows/:id/steps/:stepId", async (req, res, next) => {
+  const { id, stepId } = req.params;
+
+  if (!isValidWorkflowId(id) || !isValidWorkflowId(stepId)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_ID",
+        message: "Workflow ID and step ID must be positive integers",
+      },
+    });
+  }
+
+  const validation = updateWorkflowStepSchema.safeParse(req.body);
+
+  if (!validation.success) {
+    return res.status(400).json({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Invalid workflow step data",
+        details: validation.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
+        })),
+      },
+    });
+  }
+
+  const fields = validation.data;
+  const values = [];
+  const updates = [];
+
+  for (const [field, value] of Object.entries(fields)) {
+    values.push(value);
+    updates.push(`${field} = $${values.length}`);
+  }
+
+  updates.push("updated_at = NOW()");
+
+  values.push(stepId, id);
+
+  try {
+    const workflowResult = await pool.query(
+      `SELECT id
+       FROM workflows
+       WHERE id = $1`,
+      [id],
+    );
+
+    if (workflowResult.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_NOT_FOUND",
+          message: "Workflow not found",
+        },
+      });
+    }
+
+    const result = await pool.query(
+      `UPDATE workflow_steps
+       SET ${updates.join(", ")}
+       WHERE id = $${values.length - 1}
+         AND workflow_id = $${values.length}
+       RETURNING id, workflow_id, name, step_type, config,
+                 position, created_at, updated_at`,
+      values,
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_STEP_NOT_FOUND",
+          message: "Workflow step not found",
+        },
+      });
+    }
+
+    return res.status(200).json({
+      step: result.rows[0],
+    });
+  } catch (error) {
+    if (
+      error.code === "23505" &&
+      error.constraint === "workflow_steps_workflow_position_unique"
+    ) {
+      return res.status(409).json({
+        error: {
+          code: "STEP_POSITION_CONFLICT",
+          message: "A step already exists at this position in the workflow",
+        },
+      });
+    }
+
+    return next(error);
+  }
+});
+
+app.delete("/api/workflows/:id/steps/:stepId", async (req, res, next) => {
+  const { id, stepId } = req.params;
+
+  if (!isValidWorkflowId(id) || !isValidWorkflowId(stepId)) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_ID",
+        message: "Workflow ID and step ID must be positive integers",
+      },
+    });
+  }
+
+  try {
+    const workflowResult = await pool.query(
+      `SELECT id FROM workflows WHERE id = $1`,
+      [id],
+    );
+
+    if (workflowResult.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_NOT_FOUND",
+          message: "Workflow not found",
+        },
+      });
+    }
+
+    const result = await pool.query(
+      `DELETE FROM workflow_steps
+       WHERE id = $1 AND workflow_id = $2
+       RETURNING id, workflow_id, name, step_type, config,
+                 position, created_at, updated_at`,
+      [stepId, id],
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: {
+          code: "WORKFLOW_STEP_NOT_FOUND",
+          message: "Workflow step not found",
+        },
+      });
+    }
+
+    return res.status(200).json({ step: result.rows[0] });
+  } catch (error) {
     return next(error);
   }
 });
